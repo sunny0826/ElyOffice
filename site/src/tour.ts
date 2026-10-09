@@ -333,7 +333,7 @@ export function tour(hero: HTMLElement): { section: HTMLElement; host: HTMLEleme
       speed = 0;
     } else {
       // Exact spring step, independent of frame rate.
-      const dt = Math.min((t - clock) / 1000, 0.1);
+      const dt = Math.min(Math.max((t - clock) / 1000, 0), 0.1);
       const a = aim - at;
       const b = -speed + OMEGA * a;
       const e = Math.exp(-OMEGA * dt);
