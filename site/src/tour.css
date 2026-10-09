@@ -22,6 +22,8 @@
   position: absolute;
   inset: 0 0 auto;
   z-index: 1;
+  /* Fades and slides with the camera. */
+  will-change: opacity, translate;
 }
 
 .pin .model {
@@ -35,6 +37,8 @@
   top: 0;
   left: 0;
   transform-origin: 0 0;
+  /* The camera writes this transform every frame. */
+  will-change: transform;
 }
 
 .world .stage {

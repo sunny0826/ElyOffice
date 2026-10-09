@@ -144,6 +144,16 @@ function stop(video: HTMLVideoElement): void {
   video.load();
 }
 
+/** Frees a leaving clip off the scroll frame, when the tab is idle. */
+function release(video: HTMLVideoElement): void {
+  video.pause();
+  const spare = window.requestIdleCallback ?? ((run: () => void) => setTimeout(run, 200));
+  spare(() => {
+    // The clip may have become current again meanwhile.
+    if (video.paused) stop(video);
+  });
+}
+
 /** A rail cube for one app. */
 function cube(): SVGSVGElement {
   const svg = stage([block({ x: 0, y: 0, w: 1, d: 1, h: 0.5, tone: DESK })]);
@@ -268,7 +278,6 @@ export function tour(hero: HTMLElement): { section: HTMLElement; host: HTMLEleme
   let span = 1;
   let cams: Cam[] = [];
   let current = -1;
-  let queued = false;
 
   const measure = () => {
     const [w, h] = [pin.clientWidth, pin.clientHeight];
@@ -285,7 +294,7 @@ export function tour(hero: HTMLElement): { section: HTMLElement; host: HTMLEleme
     if (current >= 0) {
       for (const g of shown[current]) g.classList.remove("up");
       clips[current].classList.remove("up");
-      stop(clips[current]);
+      release(clips[current]);
       articles[current].classList.remove("current");
       steps[current].removeAttribute("aria-current");
     }
@@ -302,11 +311,42 @@ export function tour(hero: HTMLElement): { section: HTMLElement; host: HTMLEleme
     if (!still() && !document.hidden) start(clips[current]);
   };
 
-  const render = () => {
+  /** The camera spring: stiffness ω², critically damped. */
+  const OMEGA = 15;
+  let aim = 0;
+  let at = 0;
+  let speed = 0;
+  let began = false;
+  let clock = 0;
+  let queued = false;
+  let matrix = "";
+  let faded = "";
+  let slid = "";
+
+  const render = (t: number) => {
     queued = false;
     // The first measure comes with the first layout.
     if (!cams.length) return;
-    const p = Math.min(Math.max((scrollY - top) / span, 0), last);
+    aim = Math.min(Math.max((scrollY - top) / span, 0), last);
+    if (!began || still()) {
+      at = aim;
+      speed = 0;
+    } else {
+      // Exact spring step, independent of frame rate.
+      const dt = Math.min((t - clock) / 1000, 0.1);
+      const a = aim - at;
+      const b = -speed + OMEGA * a;
+      const e = Math.exp(-OMEGA * dt);
+      at = aim - (a + b * dt) * e;
+      speed = e * (OMEGA * (a + b * dt) - b);
+      if (Math.abs(aim - at) < 0.0005 && Math.abs(speed) < 0.01) {
+        at = aim;
+        speed = 0;
+      }
+    }
+    began = true;
+    clock = t;
+    const p = at;
     const k = Math.min(Math.floor(p), last - 1);
     const f = p - k;
     let cam: Cam;
@@ -318,18 +358,37 @@ export function tour(hero: HTMLElement): { section: HTMLElement; host: HTMLEleme
     else cam = between(cams[k], cams[k + 1], ease((f - HOLD) / (1 - 2 * HOLD)));
     const tx = cam.ax - cam.s * (cam.cx - origin[0]);
     const ty = cam.ay - cam.s * (cam.cy - origin[1]);
-    world.style.transform = `matrix(${cam.s}, 0, 0, ${cam.s}, ${tx}, ${ty})`;
+    // Holds write the same values; skipping them keeps frames free.
+    const next = `matrix(${cam.s}, 0, 0, ${cam.s}, ${tx}, ${ty})`;
+    if (next !== matrix) {
+      matrix = next;
+      world.style.transform = next;
+    }
     const fade = still() ? (p < 0.5 ? 1 : 0) : Math.max(0, 1 - p / HOLD);
-    hero.style.opacity = String(fade);
-    hero.style.visibility = fade > 0 ? "" : "hidden";
-    hero.style.translate = still() ? "" : `0 ${(-p * span * 0.3).toFixed(1)}px`;
-    const at = Math.round(p);
-    choose(at >= 1 && at < last ? at - 1 : -1);
+    const see = fade > 0 ? "" : "hidden";
+    if (String(fade) !== faded) {
+      faded = String(fade);
+      hero.style.opacity = faded;
+    }
+    if (see !== hero.style.visibility) hero.style.visibility = see;
+    const slide = still() ? "" : `0 ${(-p * span * 0.3).toFixed(1)}px`;
+    if (slide !== slid) {
+      slid = slide;
+      hero.style.translate = slide;
+    }
+    const here = Math.round(p);
+    choose(here >= 1 && here < last ? here - 1 : -1);
+    // Keeps gliding until the camera settles.
+    if ((at !== aim || speed !== 0) && !document.hidden) {
+      queued = true;
+      requestAnimationFrame(render);
+    }
   };
 
   const later = () => {
     if (queued) return;
     queued = true;
+    clock = performance.now();
     requestAnimationFrame(render);
   };
   addEventListener("scroll", later, { passive: true });
@@ -340,6 +399,8 @@ export function tour(hero: HTMLElement): { section: HTMLElement; host: HTMLEleme
   sizes.observe(pin);
   sizes.observe(hero);
   document.addEventListener("visibilitychange", () => {
+    // A hidden tab froze the glide; resume it on return.
+    if (!document.hidden) later();
     if (current < 0) return;
     if (document.hidden) clips[current].pause();
     else if (!still()) start(clips[current]);
